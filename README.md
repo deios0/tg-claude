@@ -1,297 +1,181 @@
-# Telegram + Claude — Архитектура
+# Telegram + Claude Starter
 
-Как подключить Claude к Telegram-боту с инструментами, памятью и фоновыми задачами.
+Minimal but complete Telegram bot with Claude tool use. Clone, configure, launch.
 
-## Схема
+3 demo tools included: **save_fact**, **create_reminder**, **get_reminders** — demonstrating write, time-based, and read patterns.
 
-```
-┌─────────────┐         ┌──────────────┐         ┌─────────┐
-│  Telegram    │ webhook │  FastAPI      │         │   БД    │
-│  (юзер)     ├────────►│  + bot.py     │◄───────►│ SQLAlch │
-│             │◄────────┤              │         │ emy     │
-└─────────────┘ ответ   │  handlers.py  │         └─────────┘
-                        │       │       │
-                        │       ▼       │
-                        │   chat.py     │         ┌──────────┐
-                        │       │       ├────────►│ Claude   │
-                        │       │       │◄────────┤ API      │
-                        │       ▼       │         │ (Sonnet) │
-                        │  tool loop    │         └──────────┘
-                        │   ┌───────┐   │
-                        │   │ save  │   │
-                        │   │ query │   │
-                        │   │ create│   │
-                        │   └───┬───┘   │
-                        │       │       │
-                        │       ▼ БД    │
-                        └───────────────┘
-                              │
-                        ┌─────┴──────┐
-                        │ Scheduler  │
-                        │ (APSched)  │
-                        │ cron/inter │
-                        └────────────┘
+## Quick Start
+
+### 1. Get API Keys
+
+**Telegram Bot Token:**
+1. Open Telegram, message [@BotFather](https://t.me/BotFather)
+2. Send `/newbot`, follow prompts (pick a name and username)
+3. Copy the token (looks like `123456789:ABCdefGHIjklMNOpqrSTUvwxYZ`)
+
+**Anthropic API Key:**
+1. Go to [console.anthropic.com](https://console.anthropic.com/)
+2. Create an account or sign in
+3. Go to **API Keys** → **Create Key**
+4. Copy the key (starts with `sk-ant-`)
+
+### 2. Configure
+
+```bash
+cp .env.example .env
 ```
 
-## Компоненты
-
-### 1. Telegram → Handler
-
-```python
-# bot.py — регистрация хендлеров
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(MessageHandler(filters.TEXT, handle_message))
-app.add_handler(CallbackQueryHandler(handle_callback))
+Edit `.env` and fill in:
+```
+TELEGRAM_BOT_TOKEN=your-token-from-botfather
+ANTHROPIC_API_KEY=sk-ant-your-key
 ```
 
-Сообщение приходит → `handle_message()` определяет состояние юзера → вызывает `chat_response()`.
+### 3. Run
 
-### 2. Контекст для Claude
-
-Перед каждым вызовом Claude бот собирает контекст из БД:
-
-```python
-async def chat_response(user_message, user_id, history):
-    # 1. Загрузить всё что Claude должен знать
-    context = await _load_context(user_id)
-    #    → факты о юзере, календарь, задачи, письма
-
-    # 2. Системный промпт с контекстом
-    system = f"""Ты ассистент.
-    Сегодня: {now}
-    Факты: {context.facts}
-    Календарь: {context.events}
-    ..."""
-
-    # 3. История последних N сообщений
-    messages = history + [{"role": "user", "content": user_message}]
+**Option A — Local (Python 3.10+):**
+```bash
+pip install -r requirements.txt
+python -m app.main
 ```
 
-Ключевой принцип: **Claude не помнит между сообщениями** — каждый раз получает свежий контекст из БД + последние N сообщений из истории.
-
-### 3. Tool Use Loop
-
-Claude получает список инструментов и сам решает, какой вызвать:
-
-```python
-    # 4. Вызов Claude с инструментами
-    response = await client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        system=system,
-        messages=messages,
-        tools=TOOLS,        # ← список инструментов
-        max_tokens=4000,
-    )
-
-    # 5. Цикл: Claude может вызвать несколько инструментов подряд
-    while response.stop_reason == "tool_use":
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                result = await execute_tool(block.name, block.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": str(result),
-                })
-
-        # Отправляем результаты обратно Claude
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
-
-        # Claude анализирует результат и решает:
-        # → вызвать ещё инструмент, или → ответить текстом
-        response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            system=system,
-            messages=messages,
-            tools=TOOLS,
-        )
-
-    # 6. Финальный текстовый ответ
-    return response.content[0].text
+**Option B — Docker:**
+```bash
+docker compose up --build
 ```
 
-Цикл крутится пока Claude не решит, что инструменты больше не нужны и пора ответить текстом.
+### 4. Test
 
-### 4. Определение инструмента
+1. Open your bot in Telegram
+2. Send `/start`
+3. Say "remember that I like coffee" → bot saves a fact
+4. Say "remind me in 5 minutes to take a break" → bot sets a reminder
+5. Say "show my reminders" → bot lists pending reminders
+6. Wait 5 min → bot sends the reminder proactively
+
+## Architecture
+
+```
+┌─────────────┐         ┌───────────────────┐         ┌─────────┐
+│  Telegram    │ polling │  app/             │         │ Claude  │
+│  (user)      ├────────►│  handlers.py      │         │ API     │
+│              │◄────────┤  chat.py          ├────────►│ (tools) │
+└─────────────┘  reply   │  tools.py         │◄────────┤         │
+                         └─────────┬─────────┘         └─────────┘
+                                   │
+                         ┌─────────▼─────────┐
+                         │  SQLite (aiosqlite)│
+                         │  users, facts,     │
+                         │  reminders,        │
+                         │  conversations     │
+                         └───────────────────┘
+```
+
+### Data Flow
+
+```
+User: "remember that I like hiking"
+  → handlers.py receives message
+  → chat.py builds context (facts + reminders + last 10 messages)
+  → Claude API call with tools
+  → Claude decides: tool_use → save_fact(category="hobby", fact="likes hiking")
+  → chat.py executes tool → INSERT INTO facts
+  → Claude receives result → generates text response
+  → handlers.py sends reply to Telegram
+```
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `app/main.py` | Entry point — starts bot + reminder scheduler |
+| `app/config.py` | Settings from environment variables |
+| `app/database.py` | Async SQLAlchemy + SQLite setup |
+| `app/models.py` | DB models: User, Fact, Reminder, Conversation |
+| `app/chat.py` | Claude API call with tool use loop |
+| `app/tools.py` | Tool definitions (JSON Schema) |
+| `app/handlers.py` | Telegram handlers: /start, messages, callbacks |
+
+### Key Design Choices
+
+- **SQLite** via aiosqlite — zero config. Swap to PostgreSQL by changing `DATABASE_URL`
+- **Polling** not webhook — works locally without a domain
+- **Conversation history** stored in DB, last 10 messages loaded per Claude call
+- **Reminder scheduler** checks every 60 seconds, sends due reminders proactively
+- **System prompt** configurable via `.env`
+
+## How to Add a Custom Tool
+
+### Step 1: Define the Tool Schema
+
+Add to `app/tools.py`:
 
 ```python
 TOOLS = [
+    # ... existing tools ...
     {
-        "name": "create_event",
-        "description": "Создать событие в календаре",
+        "name": "get_weather",
+        "description": "Get current weather for a city",
         "input_schema": {
             "type": "object",
             "properties": {
-                "title": {"type": "string"},
-                "start_at": {"type": "string", "description": "ISO datetime"},
+                "city": {
+                    "type": "string",
+                    "description": "City name",
+                },
             },
-            "required": ["title", "start_at"],
+            "required": ["city"],
         },
     },
-    # ... другие инструменты
 ]
 ```
 
-Claude читает `description` и `input_schema` и сам понимает когда и как вызвать инструмент. Чем точнее описание — тем лучше работает.
+### Step 2: Add the Handler
 
-### 5. Обработчик инструмента
-
-```python
-async def execute_tool(name, params):
-    if name == "create_event":
-        event = CalendarEvent(
-            title=params["title"],
-            start_at=parse_datetime(params["start_at"]),
-        )
-        session.add(event)
-        await session.commit()
-        return f"Событие создано (id={event.id})"
-
-    elif name == "search_flights":
-        flights = await search_ryanair(params["origin"], params["destination"], params["date"])
-        return format_flights(flights)
-
-    elif name == "save_fact":
-        # Claude сам решает что запомнить
-        fact = Fact(text=params["fact"], category=params["category"])
-        session.add(fact)
-        await session.commit()
-        return "Запомнил"
-```
-
-Результат — строка. Claude получает её и формулирует ответ юзеру.
-
-### 6. Inline-кнопки (undo)
-
-После создания события/напоминания — добавить кнопку отмены:
+Add to `app/chat.py` inside `_execute_tool()`:
 
 ```python
-# В handler после получения ответа от Claude:
-if tool_calls and "create_event" in tool_calls:
-    event_id = tool_calls["create_event"]["result_id"]
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ Отменить", callback_data=f"undo_event_{event_id}")
-    ]])
-    msg = await update.message.reply_text(response, reply_markup=keyboard)
-
-    # Убрать кнопки через 60 секунд
-    context.job_queue.run_once(remove_keyboard, 60, data=msg)
+elif name == "get_weather":
+    city = params["city"]
+    # Call a weather API, query DB, or compute anything
+    weather = await fetch_weather(city)
+    return json.dumps({"city": city, "temp": weather.temp, "condition": weather.condition})
 ```
 
-### 7. Фоновые задачи (Scheduler)
+### Step 3: Done
 
-```python
-# main.py — при старте приложения
-scheduler = AsyncIOScheduler()
+Claude reads the tool's `description` and `input_schema` and decides when to call it. No routing logic needed — Claude figures out intent from the conversation.
 
-# Утренний дайджест — AI генерирует сводку из контекста
-scheduler.add_job(send_digest, CronTrigger(hour=8, timezone="Europe/Paris"))
+## Configuration
 
-# Проверка напоминаний — каждую минуту
-scheduler.add_job(check_reminders, IntervalTrigger(minutes=1))
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Yes | — | From @BotFather |
+| `ANTHROPIC_API_KEY` | Yes | — | From console.anthropic.com |
+| `BOT_NAME` | No | `Assistant` | Bot display name |
+| `SYSTEM_PROMPT` | No | Generic assistant | Claude's system prompt |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-5-20250929` | Claude model ID |
+| `DATABASE_URL` | No | `sqlite+aiosqlite:///data/bot.db` | SQLAlchemy async URL |
 
-# Синхронизация почты — каждые 6 часов
-scheduler.add_job(poll_emails, IntervalTrigger(hours=6))
+## Switching to PostgreSQL
 
-scheduler.start()
+```bash
+pip install asyncpg
 ```
 
-Дайджест — это отдельный вызов Claude с промптом "сгенерируй сводку" и данными из БД.
-
-### 8. Dashboard (веб)
-
-FastAPI отдаёт и API, и HTML-страницы:
-
-```python
-# Одно приложение — бот + API + дашборд
-app = FastAPI()
-app.include_router(api_router)        # /api/* — JSON
-app.include_router(dashboard_router)  # /* — HTML страницы
-app.include_router(oauth_router)      # /oauth/* — подключение почты
+In `.env`:
+```
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/botdb
 ```
 
-Дашборд использует те же данные из БД что и бот.
+No code changes needed — SQLAlchemy handles the rest.
 
-## Поток данных
+## Stack
 
-```
-Юзер: "запиши что у Влады аллергия на орехи"
-  │
-  ▼
-Claude получает:
-  - системный промпт с контекстом
-  - историю (10 сообщений)
-  - список инструментов
-  │
-  ▼
-Claude решает: tool_use → save_fact(category="health", fact="У Влады аллергия на орехи")
-  │
-  ▼
-execute_tool("save_fact", {...}) → INSERT INTO facts → "Запомнил"
-  │
-  ▼
-Claude получает результат "Запомнил"
-  │
-  ▼
-Claude отвечает: "Записала! Буду учитывать аллергию Влады на орехи 🥜"
-  │
-  ▼
-Ответ → Telegram
-```
-
-```
-Юзер: "найди рейс в Барселону на 25 марта"
-  │
-  ▼
-Claude: tool_use → search_flights(origin="HHN", destination="BCN", date="2026-03-25")
-  │
-  ▼
-execute_tool → GET ryanair.com/api/booking/v4/availability?... → 3 рейса
-  │
-  ▼
-Claude получает список рейсов
-  │
-  ▼
-Claude: "Нашла 3 рейса HHN→BCN на 25 марта:
-  ✈️ FR1680 10:00→12:40 — 29€ (12 мест)
-  ✈️ FR1682 15:40→18:20 — 45€ (3 места)
-  ..."
-```
-
-## Стек
-
-| Слой | Технология |
-|------|-----------|
-| AI | Claude API (Anthropic SDK) |
-| Бот | python-telegram-bot |
-| Сервер | FastAPI + uvicorn |
-| БД | SQLAlchemy async + MySQL/PostgreSQL |
+| Layer | Technology |
+|-------|-----------|
+| AI | Claude API (Anthropic Python SDK) |
+| Bot | python-telegram-bot v20+ |
+| DB | SQLAlchemy 2.x async + SQLite |
 | Scheduler | APScheduler |
-| Почта | MS Graph API / Gmail API (OAuth2) |
-| Deploy | Docker Compose + nginx |
-
-## Файловая структура
-
-```
-src/
-├── ai/
-│   ├── chat.py          # Claude API + tool loop
-│   ├── tools.py         # определения инструментов (JSON Schema)
-│   └── client.py        # инициализация Anthropic SDK
-├── telegram/
-│   ├── bot.py           # создание бота, регистрация хендлеров
-│   └── handlers.py      # обработка сообщений, кнопок, голоса
-├── scheduler/
-│   ├── digest.py        # утренний дайджест (AI-генерация)
-│   ├── jobs.py          # напоминания, почта, рекурренты
-│   └── recurring.py     # логика повторяющихся событий
-├── dashboard/
-│   ├── routes.py        # HTML-страницы
-│   ├── api.py           # REST API (JSON)
-│   └── auth.py          # JWT-авторизация
-├── models/              # SQLAlchemy модели
-├── main.py              # FastAPI app + scheduler + startup
-└── database.py          # подключение к БД
-```
+| Deploy | Docker Compose |
