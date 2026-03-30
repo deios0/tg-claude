@@ -1,3 +1,17 @@
+---
+category: private
+description: Minimal Telegram bot with Claude AI tool-use integration (Docker/Python)
+name: tg-claude
+repo: deios0/tg-claude
+stack:
+- docker
+- python
+updated_at: '2026-03-30'
+zone: personal
+---
+
+
+
 # tg-claude
 
 ## Workspace Rules
@@ -38,10 +52,3 @@ docker compose up -d
 
 ## Brain Lessons
 <!-- brain:managed — do not edit manually, Brain Service updates this section -->
-
-- [2026-03-20] Dedup test lesson unique title xyz
-- [2026-03-20] Always run tests before commit
-- [2026-03-20] Testing MCP push
-- [2026-03-20] Severity: minor
-- [2026-03-20] Query test lesson unique xyz
-- [2026-03-20] Approve test lesson unique abc
