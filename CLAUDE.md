@@ -50,5 +50,9 @@ docker compose up -d
 - `.env.example` — environment template
 - `docker-compose.yml` — container setup
 
+## Dev Protocol
+
+See `Hub/playbook/dev-protocol.md` for the canonical Dev Protocol (git workflow, testing, secrets, authorship, Brain/learning hooks, cross-project boundaries).
+
 ## Brain Lessons
 <!-- brain:managed — do not edit manually, Brain Service updates this section -->
